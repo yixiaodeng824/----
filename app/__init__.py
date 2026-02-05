@@ -16,5 +16,8 @@ def create_app():
     # 注册蓝图
     from app.routes.food import food_bp
     app.register_blueprint(food_bp, url_prefix='/api')
-    
+    from app.routes.user import user_bp
+    app.register_blueprint(user_bp, url_prefix='/api')
+    from app.routes.wxlogin import wxlogin_bp
+    app.register_blueprint(wxlogin_bp, url_prefix='/api')
     return app

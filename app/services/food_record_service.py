@@ -36,6 +36,7 @@ def init_db():
 
 # 添加一条进食记录
 def add_food_record(user_id, food_name, calories, protein, carbs, fat):
+    # user_id 必须为 openid，不能为 default 或昵称
     conn = get_db()
     c = conn.cursor()
     now = datetime.now()
@@ -50,6 +51,7 @@ def add_food_record(user_id, food_name, calories, protein, carbs, fat):
 
 # 查询当天所有进食记录
 def get_today_records(user_id):
+    # user_id 必须为 openid，不能为 default 或昵称
     conn = get_db()
     c = conn.cursor()
     date = datetime.now().strftime('%Y-%m-%d')
@@ -64,6 +66,7 @@ def get_today_records(user_id):
 
 # 查询当天营养总和
 def get_today_nutrition_sum(user_id):
+    # user_id 必须为 openid，不能为 default 或昵称
     conn = get_db()
     c = conn.cursor()
     date = datetime.now().strftime('%Y-%m-%d')

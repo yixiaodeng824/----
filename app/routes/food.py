@@ -5,6 +5,7 @@ from app.services.food_detection_service import FoodDetectionService
 
 from app.services.nutrition_service import get_nutrition_for_foods
 from app.services.food_record_service import add_food_record, get_today_records, get_today_nutrition_sum
+from app.services.user_service import get_user_info, update_user_info
 
 
 food_bp = Blueprint('food', __name__)
@@ -98,7 +99,6 @@ def detect_food():
 
 
 # 推荐接口
-@food_bp.route('/recommend', methods=['POST'])
 def get_professional_recommendation(goal, cal_gap, protein_gap, intake_carbs, intake_fat):
     gap_text = f"营养缺口分析：\n"
     gap_text += f"- 热量缺口：{cal_gap:.0f}大卡\n" if cal_gap > 0 else "- 热量已达标或超标\n"
@@ -141,20 +141,36 @@ def get_professional_recommendation(goal, cal_gap, protein_gap, intake_carbs, in
 def recommend():
     data = request.get_json()
     goal = data.get('goal')  # 目标：gain/lose/maintain
-    height = data.get('height')  # cm
-    weight = data.get('weight')  # kg
-    user_id = data.get('user_id', 'default')
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({'success': False, 'msg': '缺少user_id（openid）'}), 400
+    # 优先读取数据库中的身高体重
+    info = get_user_info(user_id)
+    if info and info[0] is not None and info[1] is not None:
+        height = info[0]
+        weight = info[1]
+    else:
+        height = data.get('height')
+        weight = data.get('weight')
+        # 自动保存新用户信息
+        if height is not None and weight is not None:
+            update_user_info(user_id, height, weight)
 
     # 1. 计算推荐热量和蛋白质目标
-    if goal == 'gain':
-        target_cal = float(weight) * 40
-        protein_target = float(weight) * 2
-    elif goal == 'lose':
-        target_cal = float(weight) * 28
-        protein_target = float(weight) * 1.5
+    if weight is not None:
+        weight = float(weight)
+        if goal == 'gain':
+            target_cal = weight * 40
+            protein_target = weight * 2
+        elif goal == 'lose':
+            target_cal = weight * 28
+            protein_target = weight * 1.5
+        else:
+            target_cal = weight * 33
+            protein_target = weight * 1.2
     else:
-        target_cal = float(weight) * 33
-        protein_target = float(weight) * 1.2
+        target_cal = 0
+        protein_target = 0
 
     # 2. 查询当天已摄入营养
     nutrition_sum = get_today_nutrition_sum(user_id)
@@ -189,8 +205,11 @@ def recommend():
 @food_bp.route('/record/add', methods=['POST'])
 def add_record():
     data = request.get_json()
-    user_id = data.get('user_id', 'default')
+    user_id = data.get('user_id')
+    if not user_id:
+        return jsonify({'success': False, 'msg': '缺少user_id（openid）'}), 400
     foods = data.get('foods', [])
+    print(user_id)
     for food in foods:
         add_food_record(
             user_id,
@@ -205,7 +224,9 @@ def add_record():
 # 新增：查询今日进食记录接口
 @food_bp.route('/record/today', methods=['GET'])
 def today_record():
-    user_id = request.args.get('user_id', 'default')
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({'success': False, 'msg': '缺少user_id（openid）'}), 400
     records = get_today_records(user_id)
     nutrition_sum = get_today_nutrition_sum(user_id)
     return jsonify({
