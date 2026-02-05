@@ -99,53 +99,76 @@ def detect_food():
 
 # 推荐接口
 @food_bp.route('/recommend', methods=['POST'])
+def get_professional_recommendation(goal, cal_gap, protein_gap, intake_carbs, intake_fat):
+    gap_text = f"营养缺口分析：\n"
+    gap_text += f"- 热量缺口：{cal_gap:.0f}大卡\n" if cal_gap > 0 else "- 热量已达标或超标\n"
+    gap_text += f"- 蛋白质缺口：{protein_gap:.1f}g\n" if protein_gap > 0 else "- 蛋白质已达标\n"
+
+    if goal == 'gain':
+        supplement = (
+            "补充建议：\n"
+            "- 早餐：鸡蛋3个+燕麦粥+牛奶\n"
+            "- 午餐：鸡胸肉150g+糙米饭+蔬菜\n"
+            "- 加餐：蛋白棒或坚果\n"
+            "- 晚餐：鱼肉200g+红薯+绿叶菜\n"
+            "建议多摄入高蛋白食物，如鸡胸肉、牛肉、鱼、蛋、奶制品。"
+        )
+        notice = "注意事项：保证蛋白质摄入，适量增加碳水，避免高糖高油食物。"
+    elif goal == 'lose':
+        supplement = (
+            "补充建议：\n"
+            "- 早餐：2个鸡蛋+蔬菜沙拉\n"
+            "- 午餐：鸡胸肉120g+藜麦+大量蔬菜\n"
+            "- 晚餐：清蒸鱼150g+西兰花+豆腐\n"
+            "建议多吃蔬菜、瘦肉，控制主食和油脂摄入。"
+        )
+        notice = "注意事项：控制总热量，优先补充蛋白质，减少油脂和精制碳水摄入。"
+    else:
+        supplement = (
+            "补充建议：\n"
+            "- 早餐：全麦面包+鸡蛋+水果\n"
+            "- 午餐：鱼肉/鸡肉+杂粮饭+多种蔬菜\n"
+            "- 晚餐：豆腐+蔬菜+少量主食\n"
+            "保持饮食多样化，均衡营养。"
+        )
+        notice = "注意事项：保证食物多样性，适量运动，控制油盐摄入。"
+
+    replace_text = "食材替换推荐：如不喜欢鸡胸肉，可用牛肉、鱼肉、豆腐等替代；主食可用糙米、红薯、玉米等替换。"
+
+    return f"{gap_text}\n{supplement}\n\n{replace_text}\n\n{notice}"
+
+@food_bp.route('/recommend', methods=['POST'])
 def recommend():
     data = request.get_json()
     goal = data.get('goal')  # 目标：gain/lose/maintain
     height = data.get('height')  # cm
     weight = data.get('weight')  # kg
-    foods = data.get('foods', [])  # 识别到的食物名列表
+    user_id = data.get('user_id', 'default')
 
     # 1. 计算推荐热量和蛋白质目标
-    bmr = 24 * weight
     if goal == 'gain':
-        target_cal = weight * 40
-        protein_target = weight * 2
+        target_cal = float(weight) * 40
+        protein_target = float(weight) * 2
     elif goal == 'lose':
-        target_cal = weight * 28
-        protein_target = weight * 1.5
+        target_cal = float(weight) * 28
+        protein_target = float(weight) * 1.5
     else:
-        target_cal = weight * 33
-        protein_target = weight * 1.2
+        target_cal = float(weight) * 33
+        protein_target = float(weight) * 1.2
 
-    # 2. 统计已摄入营养
-    nutrition_list = get_nutrition_for_foods(foods)
-    total_cal = sum(item['calories'] for item in nutrition_list)
-    total_protein = sum(item['protein'] for item in nutrition_list)
-    total_carbs = sum(item['carbs'] for item in nutrition_list)
-    total_fat = sum(item['fat'] for item in nutrition_list)
+    # 2. 查询当天已摄入营养
+    nutrition_sum = get_today_nutrition_sum(user_id)
+    intake_cal = nutrition_sum[0] or 0
+    intake_protein = nutrition_sum[1] or 0
+    intake_carbs = nutrition_sum[2] or 0
+    intake_fat = nutrition_sum[3] or 0
 
-    # 3. 分析营养缺口
-    cal_gap = target_cal - total_cal
-    protein_gap = protein_target - total_protein
+    # 3. 分析缺口
+    cal_gap = target_cal - intake_cal
+    protein_gap = protein_target - intake_protein
 
-    # 4. 生成个性化建议
-    suggestion = f"您的目标为：{goal}。今日推荐热量摄入约{target_cal:.0f}大卡，蛋白质{protein_target:.0f}g。\n"
-    suggestion += f"您已摄入：热量{total_cal:.0f}大卡，蛋白质{total_protein:.1f}g，碳水{total_carbs:.1f}g，脂肪{total_fat:.1f}g。\n"
-    if cal_gap > 0:
-        suggestion += f"还需补充约{cal_gap:.0f}大卡热量。"
-    else:
-        suggestion += f"热量已达标或超标，请注意控制。"
-    if protein_gap > 0:
-        suggestion += f"蛋白质还需补充约{protein_gap:.1f}g。"
-    else:
-        suggestion += f"蛋白质已达标。"
-    if goal == 'gain':
-        suggestion += "\n建议多摄入高蛋白食物，如鸡胸肉、牛肉、鱼、蛋、奶制品。"
-    elif goal == 'lose':
-        suggestion += "\n建议多吃蔬菜、瘦肉，控制主食和油脂摄入。"
-    else:
-        suggestion += "\n保持饮食多样化，均衡营养。"
+    # 4. 生成更专业的推荐内容
+    suggestion = get_professional_recommendation(goal, cal_gap, protein_gap, intake_carbs, intake_fat)
 
     return jsonify({
         'success': True,
@@ -154,10 +177,10 @@ def recommend():
             'nutrition': {
                 'target_calories': target_cal,
                 'target_protein': protein_target,
-                'intake_calories': total_cal,
-                'intake_protein': total_protein,
-                'intake_carbs': total_carbs,
-                'intake_fat': total_fat
+                'intake_calories': intake_cal,
+                'intake_protein': intake_protein,
+                'intake_carbs': intake_carbs,
+                'intake_fat': intake_fat
             }
         }
     })
