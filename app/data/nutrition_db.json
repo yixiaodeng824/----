@@ -1,0 +1,11 @@
+[
+  {"name": "香蕉", "calories": 89, "protein": 1.1, "carbs": 22.8, "fat": 0.3},
+  {"name": "苹果", "calories": 52, "protein": 0.3, "carbs": 13.8, "fat": 0.2},
+  {"name": "三明治", "calories": 250, "protein": 8, "carbs": 30, "fat": 9},
+  {"name": "橙子", "calories": 47, "protein": 0.9, "carbs": 11.8, "fat": 0.1},
+  {"name": "西兰花", "calories": 34, "protein": 2.8, "carbs": 6.6, "fat": 0.4},
+  {"name": "胡萝卜", "calories": 41, "protein": 0.9, "carbs": 9.6, "fat": 0.2},
+  {"name": "热狗", "calories": 290, "protein": 10, "carbs": 23, "fat": 18},
+  {"name": "披萨", "calories": 266, "protein": 11, "carbs": 33, "fat": 10},
+  {"name": "蛋糕", "calories": 257, "protein": 3.8, "carbs": 38.2, "fat": 9.9}
+]

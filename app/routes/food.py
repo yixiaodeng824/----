@@ -3,8 +3,22 @@ import os
 import uuid
 from app.services.food_detection_service import FoodDetectionService
 
+from app.services.nutrition_service import get_nutrition_for_foods
+from app.services.food_record_service import add_food_record, get_today_records, get_today_nutrition_sum
+
+
 food_bp = Blueprint('food', __name__)
 detector = FoodDetectionService()
+# 删除进食记录接口
+@food_bp.route('/record/delete', methods=['POST'])
+def delete_record():
+    data = request.get_json()
+    record_id = data.get('id')
+    if not record_id:
+        return jsonify({'success': False, 'msg': '缺少记录ID'}), 400
+    from app.services.food_record_service import delete_food_record
+    delete_food_record(record_id)
+    return jsonify({'success': True, 'msg': '删除成功'})
 
 @food_bp.route('/detect', methods=['POST'])
 def detect_food():
@@ -87,35 +101,110 @@ def detect_food():
 @food_bp.route('/recommend', methods=['POST'])
 def recommend():
     data = request.get_json()
-    goal = data.get('goal')
-    bmi = data.get('bmi')
-    height = data.get('height')
-    weight = data.get('weight')
-    # 可根据 goal、bmi、height、weight 进行更复杂的推荐逻辑
-    recommendations = {
-        'gain': [
-            "增肌期间建议每日摄入热量为体重的40大卡/公斤。早餐：3个鸡蛋+全麦面包+牛奶；午餐：鸡胸肉150g+糙米饭+蔬菜；加餐：蛋白棒或坚果；晚餐：鱼肉200g+红薯+绿叶菜。保证每天蛋白质摄入量达到2g/公斤体重。",
-            "增肌需要充足碳水和蛋白质。推荐：早餐燕麦粥+蛋白粉；午餐牛肉面+额外鸡胸肉；训练后香蕉+蛋白粉；晚餐三文鱼+糙米饭。每日加餐2-3次，可选择希腊酸奶、坚果等。"
-        ],
-        'lose': [
-            "减脂期建议每日摄入热量为体重的25-30大卡/公斤。早餐：2个鸡蛋+蔬菜沙拉；午餐：鸡胸肉120g+藜麦+大量蔬菜；晚餐：清蒸鱼150g+西兰花+豆腐。避免高油高糖，多喝水，保持有氧运动。",
-            "减脂饮食要低卡高蛋白。推荐：早餐蔬菜蛋白饼；午餐虾仁炒蔬菜+少量糙米饭；晚餐鸡胸肉沙拉。加餐可选择苹果、黄瓜等低糖水果蔬菜。控制晚餐碳水摄入。"
-        ],
-        'maintain': [
-            "维持期饮食要均衡多样。早餐：全麦面包+鸡蛋+水果；午餐：鱼肉/鸡肉+杂粮饭+多种蔬菜；晚餐：豆腐+蔬菜+少量主食。每天保证12种以上食物，适量运动保持代谢。",
-            "健康维持需要均衡营养。推荐五颜六色的餐盘：1/2蔬菜+1/4蛋白质+1/4主食。多吃粗粮、豆制品，适量坚果，少盐少油烹饪。保持饮食规律和适度运动。"
-        ]
-    }
-    import random
-    recs = recommendations.get(goal, ["暂无建议"])
-    recommendation = random.choice(recs)
+    goal = data.get('goal')  # 目标：gain/lose/maintain
+    height = data.get('height')  # cm
+    weight = data.get('weight')  # kg
+    foods = data.get('foods', [])  # 识别到的食物名列表
+
+    # 1. 计算推荐热量和蛋白质目标
+    bmr = 24 * weight
+    if goal == 'gain':
+        target_cal = weight * 40
+        protein_target = weight * 2
+    elif goal == 'lose':
+        target_cal = weight * 28
+        protein_target = weight * 1.5
+    else:
+        target_cal = weight * 33
+        protein_target = weight * 1.2
+
+    # 2. 统计已摄入营养
+    nutrition_list = get_nutrition_for_foods(foods)
+    total_cal = sum(item['calories'] for item in nutrition_list)
+    total_protein = sum(item['protein'] for item in nutrition_list)
+    total_carbs = sum(item['carbs'] for item in nutrition_list)
+    total_fat = sum(item['fat'] for item in nutrition_list)
+
+    # 3. 分析营养缺口
+    cal_gap = target_cal - total_cal
+    protein_gap = protein_target - total_protein
+
+    # 4. 生成个性化建议
+    suggestion = f"您的目标为：{goal}。今日推荐热量摄入约{target_cal:.0f}大卡，蛋白质{protein_target:.0f}g。\n"
+    suggestion += f"您已摄入：热量{total_cal:.0f}大卡，蛋白质{total_protein:.1f}g，碳水{total_carbs:.1f}g，脂肪{total_fat:.1f}g。\n"
+    if cal_gap > 0:
+        suggestion += f"还需补充约{cal_gap:.0f}大卡热量。"
+    else:
+        suggestion += f"热量已达标或超标，请注意控制。"
+    if protein_gap > 0:
+        suggestion += f"蛋白质还需补充约{protein_gap:.1f}g。"
+    else:
+        suggestion += f"蛋白质已达标。"
+    if goal == 'gain':
+        suggestion += "\n建议多摄入高蛋白食物，如鸡胸肉、牛肉、鱼、蛋、奶制品。"
+    elif goal == 'lose':
+        suggestion += "\n建议多吃蔬菜、瘦肉，控制主食和油脂摄入。"
+    else:
+        suggestion += "\n保持饮食多样化，均衡营养。"
+
     return jsonify({
         'success': True,
         'data': {
-            'recommendation': recommendation
+            'recommendation': suggestion,
+            'nutrition': {
+                'target_calories': target_cal,
+                'target_protein': protein_target,
+                'intake_calories': total_cal,
+                'intake_protein': total_protein,
+                'intake_carbs': total_carbs,
+                'intake_fat': total_fat
+            }
         }
     })
 
+# 新增：保存进食记录接口
+@food_bp.route('/record/add', methods=['POST'])
+def add_record():
+    data = request.get_json()
+    user_id = data.get('user_id', 'default')
+    foods = data.get('foods', [])
+    for food in foods:
+        add_food_record(
+            user_id,
+            food['name'],
+            food.get('calories', 0),
+            food.get('protein', 0),
+            food.get('carbs', 0),
+            food.get('fat', 0)
+        )
+    return jsonify({'success': True, 'msg': '记录已保存'})
+
+# 新增：查询今日进食记录接口
+@food_bp.route('/record/today', methods=['GET'])
+def today_record():
+    user_id = request.args.get('user_id', 'default')
+    records = get_today_records(user_id)
+    nutrition_sum = get_today_nutrition_sum(user_id)
+    return jsonify({
+        'success': True,
+        'records': [
+            {
+                'id': r[0],
+                'food_name': r[1],
+                'calories': r[2],
+                'protein': r[3],
+                'carbs': r[4],
+                'fat': r[5],
+                'time': r[6]
+            } for r in records
+        ],
+        'nutrition_sum': {
+            'calories': nutrition_sum[0] or 0,
+            'protein': nutrition_sum[1] or 0,
+            'carbs': nutrition_sum[2] or 0,
+            'fat': nutrition_sum[3] or 0
+        }
+    })
 @food_bp.route('/health', methods=['GET'])
 def health():
     return jsonify({
