@@ -5,8 +5,10 @@ import numpy as np
 
 class FoodDetectionService:
     def __init__(self, model_name='yolov8n.pt'):
-        print(f"🍎 加载YOLOv8模型: {model_name}")
-        self.model = YOLO(model_name)
+        # Allow runtime model switching without code edits.
+        resolved_model_name = os.getenv('YOLO_MODEL_PATH', model_name)
+        print(f"🍎 加载YOLOv8模型: {resolved_model_name}")
+        self.model = YOLO(resolved_model_name)
         print("✅ 模型加载成功")
     
     def detect_from_file(self, image_path):
@@ -32,6 +34,18 @@ class FoodDetectionService:
         detections = []
         
         for result in results:
+            # Classification model output (no boxes, has probabilities)
+            if result.probs is not None:
+                top1_id = int(result.probs.top1)
+                class_name = result.names.get(top1_id, f'未知{top1_id}')
+                detections.append({
+                    'name': class_name,
+                    'chinese_name': self._get_chinese_name(class_name),
+                    'confidence': float(result.probs.top1conf),
+                    'bbox': None
+                })
+                continue
+
             if result.boxes is not None:
                 for box in result.boxes:
                     cls_id = int(box.cls[0])

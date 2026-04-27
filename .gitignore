@@ -1,0 +1,13 @@
+*.jpg
+datasets/food_cls/train/apple_pie/134.jpg
+
+# Training artifacts
+runs/
+**/weights/
+**/best.pt
+**/last.pt
+**/results.csv
+**/results.png
+**/confusion_matrix*.png
+**/history.csv
+**/history.json
