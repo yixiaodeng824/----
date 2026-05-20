@@ -126,8 +126,8 @@ def parse_args() -> argparse.Namespace:# 定义命令行参数，支持不同的
     )
     parser.add_argument(
         "--model",
-        default="yolov8n-cls.pt",
-        help="Base model or checkpoint path (e.g. yolov8n-cls.pt or runs/classify/food_cls/weights/last.pt)",
+        default="yolov8l-cls.pt",
+        help="Base model or checkpoint path (e.g. yolov8l-cls.pt or runs/classify/food_cls/weights/last.pt)",
     )
     parser.add_argument(
         "--data",
@@ -192,6 +192,12 @@ def parse_args() -> argparse.Namespace:# 定义命令行参数，支持不同的
         type=float,
         default=16.0,
         help="Learning-rate multiplier for LoRA up-projection parameters",
+    )
+    parser.add_argument(
+        "--prefetch-factor",
+        type=int,
+        default=4,
+        help="Batches prefetched per DataLoader worker (default: 4). Higher = less GPU idle time on Windows.",
     )
     return parser.parse_args()
 
@@ -287,6 +293,7 @@ def build_classification_dataloaders(
     batch_size: int,
     workers: int,
     aug_strength: str,
+    prefetch_factor: int = 4,
 ) -> tuple[DataLoader, DataLoader]:
     # 直接用 ImageFolder 读取 train/val 目录，类别名就是文件夹名。
     train_dir = os.path.join(data_root, "train")
@@ -304,6 +311,7 @@ def build_classification_dataloaders(
         "num_workers": max(0, workers),
         "pin_memory": pin_memory,
         "persistent_workers": workers > 0,
+        "prefetch_factor": prefetch_factor if workers > 0 else None,
     }
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
@@ -656,6 +664,7 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
         args.batch,
         args.workers,
         args.aug_strength,
+        args.prefetch_factor,
     )
 
     criterion = nn.CrossEntropyLoss()

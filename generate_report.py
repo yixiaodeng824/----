@@ -75,5 +75,5 @@ def generate_report(run_dir: str) -> None:
 
 
 if __name__ == "__main__":
-    run_dir = sys.argv[1] if len(sys.argv) > 1 else "runs/classify/food_cls_lora"
+    run_dir = sys.argv[1] if len(sys.argv) > 1 else "runs/classify/food_cls_l"
     generate_report(run_dir)
