@@ -179,6 +179,11 @@ def parse_args() -> argparse.Namespace:# 定义命令行参数，支持不同的
         action="store_true",
         help="Resume from a previous checkpoint. Use --model to point to last.pt.",
     )
+    parser.add_argument(
+        "--resume-state",
+        default=None,
+        help="Optional LoRA+ training-state path (lora_training_state.pt). If omitted, defaults to runs/<name>/lora_training_state.pt.",
+    )
     parser.add_argument("--lora-rank", type=int, default=8, help="LoRA rank for lora_plus training")
     parser.add_argument("--lora-alpha", type=float, default=16.0, help="LoRA scaling factor")
     parser.add_argument("--lora-dropout", type=float, default=0.05, help="Dropout applied before LoRA adapters")
@@ -408,6 +413,7 @@ def train_one_epoch(
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
+    skipped_batches = 0
 
     progress_bar = tqdm(loader, desc=f"[Train][Epoch {epoch}/{total_epochs}]", total=len(loader), leave=False)
     for images, targets in progress_bar:
@@ -417,7 +423,15 @@ def train_one_epoch(
         optimizer.zero_grad(set_to_none=True)
         logits = unwrap_model_output(model(images))
         loss = criterion(logits, targets)
+
+        if not math.isfinite(loss.item()):
+            skipped_batches += 1
+            optimizer.zero_grad(set_to_none=True)
+            progress_bar.update(1)
+            continue
+
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         batch_size = targets.size(0)
@@ -431,7 +445,11 @@ def train_one_epoch(
 
     progress_bar.close()
 
-    return total_loss / max(total_samples, 1), total_correct / max(total_samples, 1)
+    avg_loss = total_loss / max(total_samples, 1)
+    avg_acc = total_correct / max(total_samples, 1)
+    if skipped_batches > 0:
+        print(f"  [Train Warning] Skipped {skipped_batches} batches due to NaN loss")
+    return avg_loss, avg_acc
 
 
 @torch.no_grad()
@@ -443,30 +461,42 @@ def evaluate(
     epoch: int,
     total_epochs: int,
 ) -> tuple[float, float]:
-    # 验证集评估逻辑和训练一致，只是不更新参数。
     model.eval()
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
+    nan_batches = 0
 
     progress_bar = tqdm(loader, desc=f"[Val][Epoch {epoch}/{total_epochs}]", total=len(loader), leave=False)
     for images, targets in progress_bar:
         images = images.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
 
-        logits = unwrap_model_output(model(images))
-        loss = criterion(logits, targets)
+        try:
+            logits = unwrap_model_output(model(images))
+            loss = criterion(logits, targets)
 
-        batch_size = targets.size(0)
-        total_loss += loss.item() * batch_size
-        total_correct += (logits.argmax(dim=1) == targets).sum().item()
-        total_samples += batch_size
+            if not math.isfinite(loss.item()):
+                nan_batches += 1
+                continue
+
+            batch_size = targets.size(0)
+            total_loss += loss.item() * batch_size
+            total_correct += (logits.argmax(dim=1) == targets).sum().item()
+            total_samples += batch_size
+        except Exception as e:
+            print(f"  [Error in val batch] {e}")
+            nan_batches += 1
+            continue
 
         avg_loss = total_loss / max(total_samples, 1)
         avg_acc = total_correct / max(total_samples, 1)
         progress_bar.set_postfix(loss=f"{avg_loss:.4f}", acc=f"{avg_acc:.4f}")
 
     progress_bar.close()
+
+    if nan_batches > 0:
+        print(f"  [Warning] Skipped {nan_batches} validation batches due to NaN")
 
     return total_loss / max(total_samples, 1), total_correct / max(total_samples, 1)
 
@@ -487,6 +517,10 @@ def save_training_history(history: list[dict], run_dir: Path) -> None:
 
     with json_path.open("w", encoding="utf-8") as json_file:
         json.dump(history, json_file, ensure_ascii=False, indent=2)
+
+def save_training_history_snapshot(history: list[dict], run_dir: Path) -> None:
+    # 训练过程中每轮都刷新一次，避免中途退出时只剩 state 文件没有 CSV。
+    save_training_history(history, run_dir)
 
 
 def resolve_v8_cls_yaml() -> str:
@@ -515,6 +549,39 @@ def build_classification_yolo(model_arg: str) -> YOLO:
         cls_yaml = resolve_v8_cls_yaml()
         return YOLO(cls_yaml).load(model_arg)
     return YOLO(model_arg)
+
+
+def resolve_run_artifact_path(raw_path: str, fallback_paths: list[Path]) -> Path:
+    path = Path(raw_path)
+    if path.exists():
+        return path
+    for fallback_path in fallback_paths:
+        if fallback_path.exists():
+            return fallback_path
+    return path
+
+
+def load_plain_checkpoint_into_lora_model(model: nn.Module, plain_state_dict: dict) -> None:
+    current_keys = set(model.state_dict().keys())
+    remapped_state_dict: dict[str, torch.Tensor] = {}
+
+    for key, value in plain_state_dict.items():
+        if key in current_keys:
+            remapped_state_dict[key] = value
+            continue
+        if key.endswith(".weight"):
+            wrapped_key = f"{key[:-7]}.base_layer.weight"
+            if wrapped_key in current_keys:
+                remapped_state_dict[wrapped_key] = value
+                continue
+        if key.endswith(".bias"):
+            wrapped_key = f"{key[:-5]}.base_layer.bias"
+            if wrapped_key in current_keys:
+                remapped_state_dict[wrapped_key] = value
+                continue
+        remapped_state_dict[key] = value
+
+    model.load_state_dict(remapped_state_dict, strict=False)
 
 
 def build_plain_checkpoint(
@@ -562,7 +629,23 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
         raise ValueError("lora-plus-ratio must be > 0")
 
     device = resolve_device(args.device)
-    base_yolo = build_classification_yolo(args.model)
+    output_dir = Path(args.project) / args.name / "weights"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model_path = resolve_run_artifact_path(
+        args.model,
+        [
+            output_dir / Path(args.model).name,
+            Path(args.project) / args.name / Path(args.model).name,
+        ],
+    )
+    default_state_path = Path(args.project) / args.name / "lora_training_state.pt"
+    state_path = resolve_run_artifact_path(
+        args.resume_state if args.resume_state else str(default_state_path),
+        [
+            default_state_path,
+        ],
+    ) if (args.resume or args.resume_state) else default_state_path
+    base_yolo = build_classification_yolo(str(model_path))
     model = base_yolo.model
     replace_with_lora(model, args.lora_rank, args.lora_alpha, args.lora_dropout)
     model.to(device)
@@ -582,18 +665,19 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(args.epochs, 1))
 
-    output_dir = Path(args.project) / args.name / "weights"
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     best_state = None
     last_state = None
     best_acc = -1.0
     history: list[dict] = []
+    start_epoch = 1
+    best_checkpoint_path = output_dir / "best.pt"
 
     print("Start LoRA+ fine-tuning with args:")
     print(f"  - device: {device}")
     print(f"  - data: {args.data}")
     print(f"  - model: {args.model}")
+    print(f"  - resolved_model: {model_path}")
     print(f"  - imgsz: {args.imgsz}")
     print(f"  - batch: {args.batch}")
     print(f"  - epochs: {args.epochs}")
@@ -602,50 +686,135 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
     print(f"  - lora_alpha: {args.lora_alpha}")
     print(f"  - lora_dropout: {args.lora_dropout}")
     print(f"  - lora_plus_ratio: {args.lora_plus_ratio}")
+    print(f"  - resume: {args.resume}")
+    print(f"  - resume_state: {state_path}")
 
-    for epoch in range(1, args.epochs + 1):
-        # 每轮先训练，再验证；用验证集精度挑最优模型。
-        train_loss, train_acc = train_one_epoch(
-            model,
-            train_loader,
-            criterion,
-            optimizer,
-            device,
-            epoch,
-            args.epochs,
-        )
-        val_loss, val_acc = evaluate(
-            model,
-            val_loader,
-            criterion,
-            device,
-            epoch,
-            args.epochs,
-        )
-        scheduler.step()
-        current_lr = optimizer.param_groups[0]["lr"]
+    if args.resume:
+        if not state_path.exists():
+            raise FileNotFoundError(
+                f"--resume was set, but no LoRA+ training state was found at: {state_path}. "
+                "Use --resume-state to point to a valid lora_training_state.pt, or remove --resume to start a fresh run."
+            )
+        resume_state = torch.load(state_path, map_location=device)
+        history = list(resume_state.get("history", []))
+        finite_history: list[dict] = []
+        for record in history:
+            if all(
+                not isinstance(record.get(key), (int, float)) or math.isfinite(float(record[key]))
+                for key in ("train_loss", "train_acc", "val_loss", "val_acc", "lr")
+                if key in record
+            ):
+                finite_history.append(record)
 
-        print(
-            f"Epoch {epoch:03d}/{args.epochs:03d} | "
-            f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} | "
-            f"val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
-        )
+        has_corruption = len(finite_history) != len(history)
+        if has_corruption:
+            best_checkpoint_path = output_dir / "best.pt"
+            if best_checkpoint_path.exists():
+                print(
+                    f"Detected non-finite metrics in {state_path}; falling back to {best_checkpoint_path} "
+                    "and discarding the corrupted optimizer state."
+                )
+                best_checkpoint = torch.load(best_checkpoint_path, map_location=device, weights_only=False)
+                checkpoint_model = best_checkpoint.get("model")
+                if hasattr(checkpoint_model, "state_dict"):
+                    load_plain_checkpoint_into_lora_model(model, checkpoint_model.state_dict())
+                history = finite_history
+                best_acc = max((float(record.get("val_acc", -1.0)) for record in finite_history), default=-1.0)
+                start_epoch = len(finite_history) + 1
+            else:
+                if "model_state" in resume_state:
+                    model.load_state_dict(resume_state["model_state"])
+                best_acc = float(resume_state.get("best_acc", -1.0))
+                start_epoch = int(resume_state.get("epoch", 0)) + 1
+                print(
+                    f"Detected non-finite metrics in {state_path}, but no {best_checkpoint_path} was found; "
+                    "continuing with the saved model state."
+                )
+        else:
+            if "model_state" in resume_state:
+                model.load_state_dict(resume_state["model_state"])
+            if "optimizer_state" in resume_state:
+                optimizer.load_state_dict(resume_state["optimizer_state"])
+            if "scheduler_state" in resume_state:
+                scheduler.load_state_dict(resume_state["scheduler_state"])
+            best_acc = float(resume_state.get("best_acc", -1.0))
+            start_epoch = int(resume_state.get("epoch", 0)) + 1
 
-        history.append(
-            {
-                "epoch": epoch,
-                "train_loss": train_loss,
-                "train_acc": train_acc,
-                "val_loss": val_loss,
-                "val_acc": val_acc,
-                "lr": current_lr,
-            }
-        )
+        print(f"Resumed LoRA+ state from: {state_path} (start_epoch={start_epoch})")
 
-        last_state = copy.deepcopy(model.state_dict())
-        if val_acc >= best_acc:
-            best_acc = val_acc
-            best_state = copy.deepcopy(model.state_dict())
+    for epoch in range(start_epoch, args.epochs + 1):
+        try:
+            # 每轮先训练，再验证；用验证集精度挑最优模型。
+            train_loss, train_acc = train_one_epoch(
+                model,
+                train_loader,
+                criterion,
+                optimizer,
+                device,
+                epoch,
+                args.epochs,
+            )
+            val_loss, val_acc = evaluate(
+                model,
+                val_loader,
+                criterion,
+                device,
+                epoch,
+                args.epochs,
+            )
+            scheduler.step()
+            current_lr = optimizer.param_groups[0]["lr"]
+
+            print(
+                f"Epoch {epoch:03d}/{args.epochs:03d} | "
+                f"train_loss={train_loss:.4f} train_acc={train_acc:.4f} | "
+                f"val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
+            )
+
+            history.append(
+                {
+                    "epoch": epoch,
+                    "train_loss": train_loss,
+                    "train_acc": train_acc,
+                    "val_loss": val_loss,
+                    "val_acc": val_acc,
+                    "lr": current_lr,
+                }
+            )
+
+            last_state = copy.deepcopy(model.state_dict())
+            if val_acc >= best_acc:
+                best_acc = val_acc
+                best_state = copy.deepcopy(model.state_dict())
+
+            torch.save(
+                {
+                    "model_state": model.state_dict(),
+                    "optimizer_state": optimizer.state_dict(),
+                    "scheduler_state": scheduler.state_dict(),
+                    "history": history,
+                    "best_acc": best_acc,
+                    "epoch": epoch,
+                },
+                state_path,
+            )
+            save_training_history_snapshot(history, output_dir.parent)
+        except Exception as e:
+            print(f"[ERROR] Epoch {epoch} failed: {e}")
+            if last_state is not None:
+                torch.save(
+                    {
+                        "model_state": model.state_dict(),
+                        "optimizer_state": optimizer.state_dict(),
+                        "scheduler_state": scheduler.state_dict(),
+                        "history": history,
+                        "best_acc": best_acc,
+                        "epoch": epoch,
+                    },
+                    state_path,
+                )
+                print(f"[ERROR] Saved recovery checkpoint to {state_path} for --resume")
+            raise
 
     if last_state is None:
         raise RuntimeError("Training did not run any epoch")
