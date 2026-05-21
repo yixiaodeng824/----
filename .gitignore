@@ -1,7 +1,28 @@
-*.jpg
-datasets/food_cls/train/apple_pie/134.jpg
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
 
-# Training artifacts
+# Environment
+.env
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Model files
+*.pt
+!yolov8l-cls.pt
+
+# Dataset
+datasets/food_cls/train/
+datasets/food_cls/val/
+
+# Training outputs
 runs/
 **/weights/
 **/best.pt
@@ -9,5 +30,21 @@ runs/
 **/results.csv
 **/results.png
 **/confusion_matrix*.png
+
+# History
 **/history.csv
 **/history.json
+**/lora_training_state.pt
+**/training_report.xlsx
+
+# Uploads
+uploads/
+*.jpg
+
+# Logs
+*.log
+flask_output.log
+
+# OS
+Thumbs.db
+.DS_Store

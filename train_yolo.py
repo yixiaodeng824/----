@@ -261,10 +261,10 @@ def build_image_transforms(imgsz: int, aug_strength: str) -> tuple[transforms.Co
             normalize,
         ]
     )
-    # 验证变换则是简单的缩放和中心裁剪。两者最后都要转换成 Tensor 并归一化。
+    # 验证变换：与 YOLO 推理预处理一致（直接 Resize 到 imgsz）
     val_transform = transforms.Compose(
         [
-            transforms.Resize(int(imgsz * 1.1)),
+            transforms.Resize(imgsz),
             transforms.CenterCrop(imgsz),
             transforms.ToTensor(),
             normalize,
@@ -655,7 +655,29 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
     ) if (args.resume or args.resume_state) else default_state_path
     base_yolo = build_classification_yolo(str(model_path))
     model = base_yolo.model
+
+    # ── 获取数据集类别数 ──
+    train_dir = os.path.join(args.data, "train")
+    num_classes = len(os.listdir(train_dir))
+
+    # 把分类器输出从 1000（ImageNet）换成 101（Food-101），避免梯度浪费
+    classifier_module = model.model[9]
+    in_features = classifier_module.linear.in_features
+    classifier_module.linear = torch.nn.Linear(in_features, num_classes)
+
+    # 设置类别名称映射（与 ImageFolder 排序一致，YOLO 加载时需要）
+    class_names = sorted(os.listdir(train_dir))
+    model.names = {i: name for i, name in enumerate(class_names)}
+
     replace_with_lora(model, args.lora_rank, args.lora_alpha, args.lora_dropout)
+
+    # 解冻分类器头，让其全量更新
+    classifier_linear = model.model[9].linear
+    if hasattr(classifier_linear, "base_layer"):
+        classifier_linear.base_layer.weight.requires_grad_(True)
+        if classifier_linear.base_layer.bias is not None:
+            classifier_linear.base_layer.bias.requires_grad_(True)
+
     model.to(device)
 
     train_loader, val_loader = build_classification_dataloaders(
@@ -672,7 +694,13 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
         collect_lora_parameter_groups(model, args.lr0, args.lora_plus_ratio),
         betas=(0.9, 0.999),
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(args.epochs, 1))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=max(args.epochs, 1),
+    )
+
+    # ── 把 T_max 存入 scheduler 方便保存/恢复 ──
+    scheduler._saved_t_max = max(args.epochs, 1)
 
 
     best_state = None
@@ -705,6 +733,10 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
                 "Use --resume-state to point to a valid lora_training_state.pt, or remove --resume to start a fresh run."
             )
         resume_state = torch.load(state_path, map_location=device)
+        # 恢复原始 T_max，保证余弦周期不变
+        saved_t_max = int(resume_state.get("scheduler_t_max", args.epochs))
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=saved_t_max)
+        scheduler._saved_t_max = saved_t_max
         history = list(resume_state.get("history", []))
         finite_history: list[dict] = []
         for record in history:
@@ -732,7 +764,8 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
                 start_epoch = len(finite_history) + 1
             else:
                 if "model_state" in resume_state:
-                    model.load_state_dict(resume_state["model_state"])
+                    model.load_state_dict(resume_state["model_state"], strict=False)
+                    print("  [Resume] 分类器输出维度已从 1000 切为 101，分类器权重已重新初始化")
                 best_acc = float(resume_state.get("best_acc", -1.0))
                 start_epoch = int(resume_state.get("epoch", 0)) + 1
                 print(
@@ -741,9 +774,19 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
                 )
         else:
             if "model_state" in resume_state:
-                model.load_state_dict(resume_state["model_state"])
+                model.load_state_dict(resume_state["model_state"], strict=False)
+                print("  [Resume] 分类器输出维度已从 1000 切为 101，分类器权重已重新初始化")
             if "optimizer_state" in resume_state:
-                optimizer.load_state_dict(resume_state["optimizer_state"])
+                try:
+                    optimizer.load_state_dict(resume_state["optimizer_state"])
+                except (ValueError, RuntimeError) as e:
+                    print(f"  [Resume] 优化器状态不兼容（分类器输出维度变更），已重新初始化: {e}")
+                # 用新的 lr0 覆盖保存的旧学习率
+                for i, group in enumerate(optimizer.param_groups):
+                    if i == 1:  # up params
+                        group["lr"] = args.lr0 * args.lora_plus_ratio
+                    else:       # down / other params
+                        group["lr"] = args.lr0
             if "scheduler_state" in resume_state:
                 scheduler.load_state_dict(resume_state["scheduler_state"])
             best_acc = float(resume_state.get("best_acc", -1.0))
@@ -801,6 +844,7 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
                     "model_state": model.state_dict(),
                     "optimizer_state": optimizer.state_dict(),
                     "scheduler_state": scheduler.state_dict(),
+                    "scheduler_t_max": getattr(scheduler, "_saved_t_max", max(args.epochs, 1)),
                     "history": history,
                     "best_acc": best_acc,
                     "epoch": epoch,
@@ -816,6 +860,7 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
                         "model_state": model.state_dict(),
                         "optimizer_state": optimizer.state_dict(),
                         "scheduler_state": scheduler.state_dict(),
+                        "scheduler_t_max": getattr(scheduler, "_saved_t_max", max(args.epochs, 1)),
                         "history": history,
                         "best_acc": best_acc,
                         "epoch": epoch,

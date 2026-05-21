@@ -3,7 +3,7 @@ import os
 import uuid
 from app.services.food_detection_service import FoodDetectionService
 
-from app.services.nutrition_service import get_nutrition_for_foods
+from app.services.nutrition_service import get_nutrition_for_foods, get_nutrition_by_name
 from app.services.food_record_service import add_food_record, get_today_records, get_today_nutrition_sum
 from app.services.user_service import get_user_info, update_user_info
 
@@ -55,21 +55,12 @@ def detect_food():
         result = detector.detect_from_file(filepath)
         # 适配前端 analysis 页面，返回所有识别结果
         if result['success'] and result['detections']:
-            nutrition_map = {
-                '香蕉': {'calories': 89, 'protein': 1.1, 'carbs': 22.8, 'fat': 0.3},
-                '苹果': {'calories': 52, 'protein': 0.3, 'carbs': 13.8, 'fat': 0.2},
-                '三明治': {'calories': 250, 'protein': 8, 'carbs': 30, 'fat': 9},
-                '橙子': {'calories': 47, 'protein': 0.9, 'carbs': 11.8, 'fat': 0.1},
-                '西兰花': {'calories': 34, 'protein': 2.8, 'carbs': 6.6, 'fat': 0.4},
-                '胡萝卜': {'calories': 41, 'protein': 0.9, 'carbs': 9.6, 'fat': 0.2},
-                '热狗': {'calories': 290, 'protein': 10, 'carbs': 23, 'fat': 18},
-                '披萨': {'calories': 266, 'protein': 11, 'carbs': 33, 'fat': 10},
-                '蛋糕': {'calories': 257, 'protein': 3.8, 'carbs': 38.2, 'fat': 9.9}
-            }
             data = []
             for food in result['detections']:
                 food_name = food.get('chinese_name', food.get('name', '未知'))
-                nutrition = nutrition_map.get(food_name, {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0})
+                nutrition = get_nutrition_by_name(food_name)
+                if nutrition is None:
+                    nutrition = {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0}
                 data.append({
                     'foodName': food_name,
                     'calories': nutrition['calories'],

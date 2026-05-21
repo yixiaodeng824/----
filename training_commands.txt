@@ -9,25 +9,25 @@ conda activate diet-training
 
 ① 从头训练（跑完所有 epoch）
 ───────────────────────────────────────────────────────
-python train_yolo.py --strategy lora_plus --data datasets/food_cls --model yolov8l-cls.pt --epochs 25 --batch 128 --workers 4 --prefetch-factor 8 --lr0 0.01 --lora-rank 8 --lora-alpha 16 --lora-plus-ratio 16 --name food_cls_l
+python train_yolo.py --strategy lora_plus --data datasets/food_cls --model yolov8l-cls.pt --epochs 100 --batch 128 --workers 4 --prefetch-factor 8 --lr0 0.0005 --lora-rank 8 --lora-alpha 16 --lora-plus-ratio 16 --name food_cls_l
 
-  --epochs 50           ← 想多跑几轮就改这个数字
-  --batch 128           ← 显存不够就降到 64 或 32
-  --name food_cls_l     ← 改成你想要的实验名
+  --lr0 0.0005           ← 已优化，比默认 0.01 更稳更快
+  --epochs 100           ← 想多跑几轮就改这个数字
+  --name food_cls_l      ← 改成你想要的实验名
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ② 训练中断后接着跑（断点续训）
 ───────────────────────────────────────────────────────
-python train_yolo.py --strategy lora_plus --resume --batch 128 --workers 4 --prefetch-factor 8 --name food_cls_l
+python train_yolo.py --strategy lora_plus --resume --batch 128 --workers 4 --prefetch-factor 8 --lr0 0.0005 --name food_cls_l
+
+  旧 checkpoint 与新代码不兼容（分类器 1000→101 维），建议从头训。
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ③ 训练完成后还想继续加训
 ───────────────────────────────────────────────────────
-python train_yolo.py --strategy lora_plus --resume --batch 128 --workers 4 --prefetch-factor 8 --epochs 26 --name food_cls_l
-
-  --epochs 设得比原来大即可续跑（原来 50 → 100 就再加 50 轮）
+python train_yolo.py --strategy lora_plus --resume --batch 128 --workers 4 --prefetch-factor 8 --lr0 0.0005 --epochs 150 --name food_cls_l
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
