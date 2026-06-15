@@ -20,4 +20,6 @@ def create_app():
     app.register_blueprint(user_bp, url_prefix='/api')
     from app.routes.wxlogin import wxlogin_bp
     app.register_blueprint(wxlogin_bp, url_prefix='/api')
+    from app.routes.deepseek import deepseek_bp
+    app.register_blueprint(deepseek_bp, url_prefix='/api')
     return app

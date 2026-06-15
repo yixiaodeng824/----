@@ -9,3 +9,5 @@ torch
 torchvision
 tqdm
 openpyxl
+openai>=1.0.0
+python-dotenv>=1.0.0

@@ -2,7 +2,6 @@ import os
 import math
 import torch
 import cv2
-import numpy as np
 from torchvision import transforms as T
 from PIL import Image
 
@@ -78,7 +77,6 @@ class FoodDetectionService:
                 sharpen = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
                 img_bgr = cv2.filter2D(img_bgr, -1, sharpen)
                 img_bgr = cv2.convertScaleAbs(img_bgr, alpha=1.1, beta=5)
-
             # BGR → RGB → PIL → transforms → 推理
             img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
             img_pil = Image.fromarray(img_rgb)

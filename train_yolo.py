@@ -26,6 +26,13 @@ try:
 except ImportError as exc:  # pragma: no cover - explicit dependency error path
     raise ImportError("训练进度条需要安装 tqdm") from exc
 
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+except ImportError as exc:  # pragma: no cover - explicit dependency error path
+    raise ImportError("绘图需要安装 matplotlib") from exc
+
 from ultralytics import YOLO
 import ultralytics
 
@@ -199,6 +206,18 @@ def parse_args() -> argparse.Namespace:# 定义命令行参数，支持不同的
         default=4,
         help="Batches prefetched per DataLoader worker (default: 4). Higher = less GPU idle time on Windows.",
     )
+    parser.add_argument(
+        "--subset",
+        type=float,
+        default=1.0,
+        help="Fraction of training data to use (e.g. 0.1 for 10%). Useful for quick baseline experiments.",
+    )
+    parser.add_argument(
+        "--label-smoothing",
+        type=float,
+        default=0.0,
+        help="Label smoothing factor for CrossEntropyLoss (default: 0.0 = no smoothing).",
+    )
     return parser.parse_args()
 
 
@@ -294,6 +313,7 @@ def build_classification_dataloaders(
     workers: int,
     aug_strength: str,
     prefetch_factor: int = 4,
+    subset: float = 1.0,
 ) -> tuple[DataLoader, DataLoader]:
     # 直接用 ImageFolder 读取 train/val 目录，类别名就是文件夹名。
     train_dir = os.path.join(data_root, "train")
@@ -305,6 +325,14 @@ def build_classification_dataloaders(
 
     if train_dataset.class_to_idx != val_dataset.class_to_idx:
         raise ValueError("train and val class folders must match exactly")
+
+    # 取训练子集（快速基线实验用）
+    if 0.0 < subset < 1.0:
+        num_train = len(train_dataset)
+        num_subset = max(1, int(num_train * subset))
+        indices = torch.randperm(num_train)[:num_subset]
+        train_dataset = torch.utils.data.Subset(train_dataset, indices)
+        print(f"  [Data] 使用 {subset*100:.0f}% 训练数据: {num_subset}/{num_train} 张")
 
     pin_memory = torch.cuda.is_available()
     loader_kwargs = {
@@ -405,6 +433,44 @@ def unwrap_model_output(outputs: torch.Tensor | tuple | list | dict) -> torch.Te
                     continue
 
     raise TypeError(f"Unsupported model output type: {type(outputs)!r}")
+
+
+def plot_training_history(history: list[dict], run_dir: Path) -> None:
+    """绘制训练损失和准确率曲线，保存到 run_dir 下。"""
+    if not history:
+        return
+
+    epochs = [h["epoch"] for h in history]
+    train_loss = [h["train_loss"] for h in history]
+    val_loss = [h["val_loss"] for h in history]
+    train_acc = [h["train_acc"] for h in history]
+    val_acc = [h["val_acc"] for h in history]
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # 损失曲线
+    ax1.plot(epochs, train_loss, label="Train Loss", marker=".")
+    ax1.plot(epochs, val_loss, label="Val Loss", marker=".")
+    ax1.set_xlabel("Epoch")
+    ax1.set_ylabel("Loss")
+    ax1.set_title("Loss Curve")
+    ax1.legend()
+    ax1.grid(True)
+
+    # 准确率曲线
+    ax2.plot(epochs, train_acc, label="Train Acc", marker=".")
+    ax2.plot(epochs, val_acc, label="Val Acc", marker=".")
+    ax2.set_xlabel("Epoch")
+    ax2.set_ylabel("Accuracy")
+    ax2.set_title("Accuracy Curve")
+    ax2.legend()
+    ax2.grid(True)
+
+    fig.tight_layout()
+    save_path = run_dir / "training_curves.png"
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+    print(f"  [Plot] 训练曲线已保存到: {save_path}")
 
 
 def train_one_epoch(
@@ -687,9 +753,10 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
         args.workers,
         args.aug_strength,
         args.prefetch_factor,
+        args.subset,
     )
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     optimizer = torch.optim.AdamW(
         collect_lora_parameter_groups(model, args.lr0, args.lora_plus_ratio),
         betas=(0.9, 0.999),
@@ -706,6 +773,7 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
     best_state = None
     last_state = None
     best_acc = -1.0
+    patience_counter = 0
     history: list[dict] = []
     start_epoch = 1
     best_checkpoint_path = output_dir / "best.pt"
@@ -838,6 +906,13 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
             if val_acc >= best_acc:
                 best_acc = val_acc
                 best_state = copy.deepcopy(model.state_dict())
+                patience_counter = 0
+            else:
+                patience_counter += 1
+                print(f"  EarlyStopping: {patience_counter}/{args.patience} 轮未提升 (best_val_acc={best_acc:.4f})")
+                if patience_counter >= args.patience:
+                    print(f"  EarlyStopping: {args.patience} 轮未提升，提前停止训练")
+                    break
 
             torch.save(
                 {
@@ -887,6 +962,7 @@ def run_lora_plus_training(args: argparse.Namespace) -> None:
     torch.save(last_ckpt, output_dir / "last.pt")
     torch.save(best_ckpt, output_dir / "best.pt")
     save_training_history(history, output_dir.parent)
+    plot_training_history(history, output_dir.parent)
     print(f"LoRA+ training finished. Saved checkpoints to: {output_dir}")
 
 
