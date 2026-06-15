@@ -1,38 +1,265 @@
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  LoRA+ 训练命令速查 (模型: yolov8l-cls)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  主程序模型说明 & 训练指南
+  项目: 膳食健康助手 (Dietary Health Assistant)
+  模型: YOLOv8l-cls (YOLOv8 Large Classification)
+  数据集: Food-101 (101 类)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【模型在推理中的位置】
+
+  用户拍照 → Flask 接收 → YOLOv8l 识别食物名 → 营养库查询 → 返回前端
+                                    ↓
+                          DeepSeek 联网百科增强
+
+  模型文件: runs/classify/food_cls_l/weights/best.pt
+  加载方式: torch.load() → ckpt['model'] (导出时已剥离 LoRA，可直接推理)
+
+【模型输入 (Input)】
+
+  图像大小:   224 × 224 像素
+  预处理流程:
+    1. cv2.imread() 读取图片 (BGR)
+    2. cv2.cvtColor(BGR → RGB)
+    3. PIL.Image.fromarray() 转为 PIL 图像
+    4. transforms.Resize(224)        ← 等比缩放，短边 224
+    5. transforms.CenterCrop(224)    ← 中心裁剪 224×224
+    6. transforms.ToTensor()         ← 转为 [0,1] 范围的张量
+    7. transforms.Normalize(
+         mean=[0.485, 0.456, 0.406],  ← ImageNet 均值
+         std=[0.229, 0.224, 0.225]    ← ImageNet 标准差
+       )
+
+  推理增强 (提高低质量图片识别率):
+    - cv2 锐化 (kernel_size=3, alpha=0.5)
+    - CLAHE 对比度增强
+
+【模型输出 (Output)】
+
+  模型前向:  logits.shape = (1, 101)    ← 101 个类别的原始分数
+  softmax 后: probs.shape = (1, 101)   ← 概率分布
+  取 top-1:   food_name → 中文映射     ← 见 food_detection_service.py 的 name_map
+
+  101 类食物列表 (英文名 → 中文名):
+
+  apple_pie → 苹果派              baby_back_ribs → 烤肋排
+  baklava → 果仁蜜饼              beef_carpaccio → 生牛肉薄片
+  beef_tartare → 牛肉鞑靼         beet_salad → 甜菜沙拉
+  beignets → 法式炸甜点           bibimbap → 石锅拌饭
+  bread_pudding → 面包布丁        breakfast_burrito → 早餐卷饼
+  bruschetta → 烤面包片           caesar_salad → 凯撒沙拉
+  cannoli → 奶油甜卷              caprese_salad → 卡普里沙拉
+  carrot_cake → 胡萝卜蛋糕        ceviche → 酸橘汁腌鱼
+  cheese_plate → 奶酪拼盘         cheesecake → 芝士蛋糕
+  chicken_curry → 咖喱鸡          chicken_quesadilla → 鸡肉薄饼
+  chicken_wings → 鸡翅            chocolate_cake → 巧克力蛋糕
+  chocolate_mousse → 巧克力慕斯   churros → 吉拿果
+  clam_chowder → 蛤蜊浓汤         club_sandwich → 俱乐部三明治
+  crab_cakes → 蟹饼               creme_brulee → 焦糖布丁
+  croque_madame → 法式三明治      cup_cakes → 纸杯蛋糕
+  deviled_eggs → 魔鬼蛋           donuts → 甜甜圈
+  dumplings → 饺子                edamame → 毛豆
+  eggs_benedict → 班尼迪克蛋      escargots → 焗蜗牛
+  falafel → 法拉费                filet_mignon → 菲力牛排
+  fish_and_chips → 炸鱼薯条       foie_gras → 鹅肝
+  french_fries → 薯条             french_onion_soup → 法式洋葱汤
+  french_toast → 法式吐司         fried_calamari → 炸鱿鱼
+  fried_rice → 炒饭               frozen_yogurt → 冻酸奶
+  garlic_bread → 蒜香面包         gnocchi → 意式土豆丸子
+  greek_salad → 希腊沙拉          grilled_cheese_sandwich → 烤芝士三明治
+  grilled_salmon → 烤三文鱼       guacamole → 鳄梨酱
+  gyoza → 锅贴                    hamburger → 汉堡包
+  hot_and_sour_soup → 酸辣汤      hot_dog → 热狗
+  huevos_rancheros → 墨西哥煎蛋   hummus → 鹰嘴豆泥
+  ice_cream → 冰淇淋              lasagna → 千层面
+  lobster_bisque → 龙虾浓汤       lobster_roll_sandwich → 龙虾卷
+  macaroni_and_cheese → 芝士通心粉 macarons → 马卡龙
+  miso_soup → 味噌汤              mussels → 青口贝
+  nachos → 玉米片                 omelette → 煎蛋卷
+  onion_rings → 洋葱圈            oysters → 生蚝
+  pad_thai → 泰式炒河粉           paella → 海鲜饭
+  pancakes → 松饼                 panna_cotta → 意式奶冻
+  peking_duck → 北京烤鸭          pho → 越南河粉
+  pizza → 披萨                    pork_chop → 猪排
+  poutine → 肉汁薯条              prime_rib → 烤牛肋
+  pulled_pork_sandwich → 手撕猪肉三明治  ramen → 拉面
+  ravioli → 意大利饺              red_velvet_cake → 红丝绒蛋糕
+  risotto → 意大利烩饭            samosa → 咖喱角
+  sashimi → 刺身                  scallops → 扇贝
+  seaweed_salad → 海藻沙拉        shrimp_and_grits → 虾仁玉米粥
+  spaghetti_bolognese → 肉酱意面  spaghetti_carbonara → 奶油培根意面
+  spring_rolls → 春卷             steak → 牛排
+  strawberry_shortcake → 草莓蛋糕  sushi → 寿司
+  tacos → 墨西哥卷饼              takoyaki → 章鱼小丸子
+  tiramisu → 提拉米苏             tuna_tartare → 金枪鱼鞑靼
+  waffles → 华夫饼
+
+  营养数据: 识别后的中文名去 nutrition_db.json 查 (每 100g 的热量/蛋白质/碳水/脂肪)
+
+【数据集目录结构】
+
+  datasets/food_cls/
+    ├── train/
+    │   ├── apple_pie/        ← 每个类别一个文件夹
+    │   │   ├── 0001.jpg
+    │   │   ├── 0002.jpg
+    │   │   └── ...
+    │   ├── baby_back_ribs/
+    │   └── ...               ← 共 101 个文件夹
+    └── val/
+        ├── apple_pie/
+        ├── baby_back_ribs/
+        └── ...
+
+  要求: train/ 和 val/ 下的文件夹名必须完全一致
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  训练命令速查
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 【使用前先激活环境】
-conda activate diet-training
+  conda activate diet
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【预训练权重】
 
-① 从头训练（跑完所有 epoch）
-───────────────────────────────────────────────────────
-python train_yolo.py --strategy lora_plus --data datasets/food_cls --model yolov8l-cls.pt --epochs 100 --batch 128 --workers 4 --prefetch-factor 8 --lr0 0.0005 --lora-rank 8 --lora-alpha 16 --lora-plus-ratio 16 --name food_cls_l
+  yolov8l-cls.pt     ← Large 模型 (当前主程序使用)，参数多，精度高
+  yolov8n-cls.pt     ← Nano 模型，参数少，推理快但精度略低
 
-  --lr0 0.0005           ← 已优化，比默认 0.01 更稳更快
-  --epochs 100           ← 想多跑几轮就改这个数字
-  --name food_cls_l      ← 改成你想要的实验名
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+① LoRA+ 训练 (当前主程序使用的训练策略)
+───────────────────────────────────────────────────────────────
+  特点: 只训练低秩适配器 + 分类头，冻结主干网络
+        参数量小、训练快、显存需求低
+        导出时自动合并权重为标准 checkpoint，推理无额外开销
 
-② 训练中断后接着跑（断点续训）
-───────────────────────────────────────────────────────
-python train_yolo.py --strategy lora_plus --resume --batch 128 --workers 4 --prefetch-factor 8 --lr0 0.0005 --name food_cls_l
+  python train_yolo.py \
+    --strategy lora_plus \
+    --data datasets/food_cls \
+    --model yolov8l-cls.pt \
+    --epochs 100 \
+    --batch 64 \
+    --workers 4 \
+    --prefetch-factor 8 \
+    --lr0 0.001 \
+    --lora-rank 8 \
+    --lora-alpha 16 \
+    --lora-plus-ratio 16 \
+    --aug-strength medium \
+    --patience 30 \
+    --name food_cls_lora
 
-  旧 checkpoint 与新代码不兼容（分类器 1000→101 维），建议从头训。
+  关键参数说明:
+    --lora-rank 8         LoRA 低秩矩阵的秩 (越大越接近全量微调)
+    --lora-alpha 16       LoRA 缩放系数 (控制适配器更新强度)
+    --lora-plus-ratio 16  上投影学习率 = lr0 × ratio (LoRA+ 核心)
+    --lr0 0.001           基础学习率 (推荐 0.0005~0.001)
+    --batch 64            批大小 (显存不够就减小)
+    --patience 30         早停耐心值 (30轮不提升则停止)
+    --aug-strength medium 数据增强强度 (weak/medium/strong)
+    --label-smoothing 0.0 标签平滑 (防过拟合，推荐 0.05~0.1)
+    --subset 1.0          训练数据比例 (0.1 = 只用10%，快速验证用)
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  输出文件:
+    runs/classify/<name>/weights/best.pt     ← 最佳模型 (推理用这个)
+    runs/classify/<name>/weights/last.pt     ← 最后一轮的模型
+    runs/classify/<name>/history.csv         ← 训练指标 CSV
+    runs/classify/<name>/history.json        ← 训练指标 JSON
+    runs/classify/<name>/training_curves.png ← 损失 & 准确率曲线
+    runs/classify/<name>/lora_training_state.pt ← 断点恢复文件
 
-③ 训练完成后还想继续加训
-───────────────────────────────────────────────────────
-python train_yolo.py --strategy lora_plus --resume --batch 128 --workers 4 --prefetch-factor 8 --lr0 0.0005 --epochs 150 --name food_cls_l
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+② 全量微调 (追求最高精度)
+───────────────────────────────────────────────────────────────
+  特点: 所有参数都参与训练
+        精度最高，但显存需求大、训练慢
 
-④ 生成 Excel 训练报表
-───────────────────────────────────────────────────────
-python generate_report.py runs/classify/food_cls_l
+  python train_yolo.py \
+    --strategy full \
+    --data datasets/food_cls \
+    --model yolov8l-cls.pt \
+    --epochs 100 \
+    --batch 32 \
+    --workers 4 \
+    --lr0 0.001 \
+    --aug-strength medium \
+    --patience 20 \
+    --name food_cls_full
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  预期精度: Val Acc ≈ 88-92%
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+③ 分阶段微调 (冻结 → 解冻)
+───────────────────────────────────────────────────────────────
+  特点: 先冻结主干训练分类头，再解冻全量训练
+        比全量微调略快，精度接近
+
+  python train_yolo.py \
+    --strategy freeze_then_unfreeze \
+    --data datasets/food_cls \
+    --model yolov8l-cls.pt \
+    --freeze-epochs 20 \
+    --unfreeze-epochs 30 \
+    --freeze-layers 10 \
+    --batch 64 \
+    --workers 4 \
+    --lr0 0.001 \
+    --name food_cls_staged
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+④ 断点续训 (LoRA+ 专用)
+───────────────────────────────────────────────────────────────
+
+  python train_yolo.py \
+    --strategy lora_plus \
+    --resume \
+    --batch 64 \
+    --workers 4 \
+    --prefetch-factor 8 \
+    --lr0 0.001 \
+    --epochs 120 \
+    --name food_cls_lora
+
+  会自动从 runs/classify/food_cls_lora/lora_training_state.pt 恢复
+  (T_max、epoch、optimizer、scheduler 全量恢复)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⑤ 生成 Excel 训练报表
+───────────────────────────────────────────────────────────────
+
+  python generate_report.py runs/classify/food_cls_lora
+
+  生成的 training_report.xlsx 包含:
+    - 最佳 epoch 的各项指标
+    - 所有 epoch 指标明细
+    - 超参数汇总
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⑥ 训练指标可视化
+───────────────────────────────────────────────────────────────
+
+  python visualize_train_yolo.py runs/classify/food_cls_lora
+
+  生成独立的精确度/损失对比图 (与训练过程自动生成的 training_curves.png 互补)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+【训练完后如何部署到主程序】
+
+  1. 训练完成，确认 runs/classify/<name>/weights/best.pt 存在
+  2. 修改 food_detection_service.py 中的模型路径:
+     model_name = 'runs/classify/<name>/weights/best.pt'
+  3. 重启 Flask 服务即可
+
+  或者直接覆盖现有模型文件:
+  cp runs/classify/<name>/weights/best.pt runs/classify/food_cls_l/weights/best.pt
+
+───────────────────────────────────────────────────────────────
+  当前最佳模型: food_cls_l (LoRA+, 78 epoch, Val Acc ≈ 79%)
+  训练时间: 约 2-3 小时 (RTX 3060 12GB)
+  推理速度: < 50ms / 张
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
