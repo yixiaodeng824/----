@@ -102,6 +102,7 @@ def detect_with_deepseek():
             "nutrition": nutrition,
         },
         "deepseek_result": deepseek_info,
+        "_test": "deepseek_ok",
     })
 
 
