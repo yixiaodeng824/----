@@ -60,6 +60,12 @@ def detect_with_deepseek():
     # ── 3. YOLOv8 识别 ──
     yolo_result = detector.detect_from_file(filepath)
 
+    # 识别完毕，删除临时图片
+    try:
+        os.remove(filepath)
+    except Exception:
+        pass
+
     if not yolo_result["success"] or not yolo_result["detections"]:
         return jsonify({
             "success": False,
@@ -175,3 +181,33 @@ def detect_with_deepseek_stream():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@deepseek_bp.route("/deepseek/query", methods=["POST"])
+def deepseek_query():
+    """
+    单独调用 DeepSeek（无需上传图片，只需传入食物名和营养数据）。
+
+    请求 JSON:
+    {
+      "food_name": "北京烤鸭",
+      "nutrition": {"calories": 100, "protein": 10, "carbs": 5, "fat": 7}
+    }
+    """
+    data = request.get_json()
+    food_name = data.get("food_name", "")
+    if not food_name:
+        return jsonify({"success": False, "message": "缺少 food_name"}), 400
+
+    nutrition = data.get("nutrition")
+    try:
+        deepseek_info = query_food_info(food_name, nutrition)
+        return jsonify({
+            "success": True,
+            "data": deepseek_info,
+        })
+    except RuntimeError as e:
+        return jsonify({
+            "success": False,
+            "message": str(e),
+        })

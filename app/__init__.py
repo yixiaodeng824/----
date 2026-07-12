@@ -22,4 +22,6 @@ def create_app():
     app.register_blueprint(wxlogin_bp, url_prefix='/api')
     from app.routes.deepseek import deepseek_bp
     app.register_blueprint(deepseek_bp, url_prefix='/api')
+    from app.routes.weekly import weekly_bp
+    app.register_blueprint(weekly_bp, url_prefix='/api')
     return app

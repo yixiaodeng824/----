@@ -48,11 +48,18 @@ def detect_food():
         os.makedirs(upload_folder, exist_ok=True)
         filepath = os.path.join(upload_folder, unique_filename)
         file.save(filepath)
-        
+
         print(f"📁 文件保存: {filepath}")
-        
+
         # 检测
         result = detector.detect_from_file(filepath)
+
+        # 检测完成后删除临时图片，释放磁盘空间
+        try:
+            os.remove(filepath)
+            print(f"🗑️ 临时文件已删除: {filepath}")
+        except Exception:
+            pass  # 删除失败不影响功能
         # 适配前端 analysis 页面，返回所有识别结果
         if result['success'] and result['detections']:
             data = []
@@ -244,6 +251,8 @@ def add_record():
     user_id = data.get('user_id')
     if not user_id:
         return jsonify({'success': False, 'msg': '缺少user_id（openid）'}), 400
+    meal_type = data.get('meal_type', 'lunch')
+    canteen = data.get('canteen', '未知')
     foods = data.get('foods', [])
     print(user_id)
     for food in foods:
@@ -253,7 +262,9 @@ def add_record():
             food.get('calories', 0),
             food.get('protein', 0),
             food.get('carbs', 0),
-            food.get('fat', 0)
+            food.get('fat', 0),
+            meal_type=meal_type,
+            canteen=canteen,
         )
     return jsonify({'success': True, 'msg': '记录已保存'})
 
@@ -275,7 +286,9 @@ def today_record():
                 'protein': r[3],
                 'carbs': r[4],
                 'fat': r[5],
-                'time': r[6]
+                'time': r[6],
+                'meal_type': r[7] or 'lunch',
+                'canteen': r[8] or '未知',
             } for r in records
         ],
         'nutrition_sum': {
