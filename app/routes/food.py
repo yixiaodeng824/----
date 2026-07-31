@@ -65,15 +65,18 @@ def detect_food():
             data = []
             for food in result['detections']:
                 food_name = food.get('chinese_name', food.get('name', '未知'))
+                conf = food.get('confidence', 0)
                 nutrition = get_nutrition_by_name(food_name)
                 if nutrition is None:
                     nutrition = {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0}
                 data.append({
                     'foodName': food_name,
+                    'confidence': conf,
+                    'confidenceRate': f'{conf * 100:.0f}',
                     'calories': nutrition['calories'],
                     'protein': nutrition['protein'],
                     'carbs': nutrition['carbs'],
-                    'fat': nutrition['fat']
+                    'fat': nutrition['fat'],
                 })
             return jsonify({
                 'success': True,
@@ -88,51 +91,6 @@ def detect_food():
                 'code': 400
             }), 400
         
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'错误: {str(e)}',
-            'code': 500
-        }), 500
-
-
-@food_bp.route('/detect/deepseek', methods=['POST'])
-def detect_food_deepseek():
-    try:
-        if 'image' not in request.files:
-            return jsonify({
-                'success': False,
-                'message': '请上传图片文件',
-                'code': 400
-            }), 400
-
-        file = request.files['image']
-        if file.filename == '':
-            return jsonify({
-                'success': False,
-                'message': '未选择文件',
-                'code': 400
-            }), 400
-
-        file_ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
-        unique_filename = f"{uuid.uuid4().hex}.{file_ext}"
-
-        upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
-        os.makedirs(upload_folder, exist_ok=True)
-        filepath = os.path.join(upload_folder, unique_filename)
-        file.save(filepath)
-
-        result = detector.detect_from_file(filepath)
-        status_code = 200 if result.get('success') else 400
-        return jsonify({
-            'success': result.get('success', False),
-            'message': result.get('message') or result.get('error') or '未识别到食物',
-            'filename': unique_filename,
-            'yolo_result': result,
-            'deepseek_result': result,
-            'code': status_code
-        }), status_code
-
     except Exception as e:
         return jsonify({
             'success': False,

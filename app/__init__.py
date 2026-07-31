@@ -1,4 +1,19 @@
 # 使 app 成为 Python 包
+
+# ── 跨平台兼容：Linux训练的模型在Windows上加载 ──
+import pathlib
+pathlib.PosixPath = pathlib.PurePosixPath
+
+import yaml
+import ultralytics.utils
+
+
+def _yaml_load(file, **kw):
+    return yaml.safe_load(open(file, errors="ignore"))
+
+
+ultralytics.utils.yaml_load = _yaml_load
+
 from flask import Flask
 from flask_cors import CORS
 

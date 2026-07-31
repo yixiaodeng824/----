@@ -8,12 +8,13 @@ import uuid
 import json
 from flask import Blueprint, request, jsonify, current_app, Response, stream_with_context
 
-from app.services.food_detection_service import FoodDetectionService
 from app.services.nutrition_service import get_nutrition_by_name
 from app.services.deepseek_service import query_food_info, query_food_info_stream
 
+# 复用 food.py 里的模型实例，避免重复加载
+from app.routes.food import detector
+
 deepseek_bp = Blueprint("deepseek", __name__)
-detector = FoodDetectionService()
 
 
 @deepseek_bp.route("/detect/deepseek", methods=["POST"])

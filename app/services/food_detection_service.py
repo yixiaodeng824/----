@@ -2,6 +2,7 @@ import os
 import math
 import torch
 import cv2
+import numpy as np
 from torchvision import transforms as T
 from PIL import Image
 
