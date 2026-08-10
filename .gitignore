@@ -37,6 +37,9 @@ runs/
 **/lora_training_state.pt
 **/training_report.xlsx
 
+# Runtime databases (首次运行自动重建，含用户数据，勿提交)
+app/data/*.db
+
 # Uploads
 uploads/
 *.jpg
