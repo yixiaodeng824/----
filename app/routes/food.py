@@ -1,27 +1,30 @@
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, g
 import os
-import uuid
 from app.services.food_detection_service import FoodDetectionService
-
-from app.services.nutrition_service import get_nutrition_for_foods, get_nutrition_by_name
+from app.services.auth_service import require_auth
+from app.services.upload_service import save_upload, safe_remove
+from app.services.nutrition_service import get_nutrition_by_name
 from app.services.food_record_service import add_food_record, get_today_records, get_today_nutrition_sum
 from app.services.user_service import get_user_info, update_user_info
+from app.services.recommendation_service import get_professional_recommendation
 
 
 food_bp = Blueprint('food', __name__)
 detector = FoodDetectionService()
 # 删除进食记录接口
 @food_bp.route('/record/delete', methods=['POST'])
+@require_auth
 def delete_record():
     data = request.get_json()
     record_id = data.get('id')
     if not record_id:
-        return jsonify({'success': False, 'msg': '缺少记录ID'}), 400
+        return jsonify({'success': False, 'message': '缺少记录ID'}), 400
     from app.services.food_record_service import delete_food_record
-    delete_food_record(record_id)
-    return jsonify({'success': True, 'msg': '删除成功'})
+    delete_food_record(record_id, user_id=g.openid)  # 只能删自己的记录
+    return jsonify({'success': True, 'message': '删除成功'})
 
 @food_bp.route('/detect', methods=['POST'])
+@require_auth
 def detect_food():
     try:
         if 'image' not in request.files:
@@ -39,46 +42,39 @@ def detect_food():
                 'code': 400
             }), 400
         
-        # 生成唯一文件名
-        file_ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
-        unique_filename = f"{uuid.uuid4().hex}.{file_ext}"
-        
-        # 保存文件
-        upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
-        os.makedirs(upload_folder, exist_ok=True)
-        filepath = os.path.join(upload_folder, unique_filename)
-        file.save(filepath)
-
+        # 保存文件（临时，检测后立即删除）
+        filepath = save_upload(file)
         print(f"📁 文件保存: {filepath}")
 
         # 检测
         result = detector.detect_from_file(filepath)
 
         # 检测完成后删除临时图片，释放磁盘空间
-        try:
-            os.remove(filepath)
-            print(f"🗑️ 临时文件已删除: {filepath}")
-        except Exception:
-            pass  # 删除失败不影响功能
+        safe_remove(filepath)
+        print(f"🗑️ 临时文件已删除: {filepath}")
         # 适配前端 analysis 页面，返回所有识别结果
         if result['success'] and result['detections']:
             data = []
             for food in result['detections']:
                 food_name = food.get('chinese_name', food.get('name', '未知'))
+                conf = food.get('confidence', 0)
                 nutrition = get_nutrition_by_name(food_name)
                 if nutrition is None:
                     nutrition = {'calories': 0, 'protein': 0, 'carbs': 0, 'fat': 0}
                 data.append({
                     'foodName': food_name,
+                    'confidence': conf,
+                    'confidenceRate': f'{conf * 100:.0f}',
                     'calories': nutrition['calories'],
                     'protein': nutrition['protein'],
                     'carbs': nutrition['carbs'],
-                    'fat': nutrition['fat']
+                    'fat': nutrition['fat'],
                 })
             return jsonify({
                 'success': True,
                 'data': data,
-                'filename': unique_filename,
+                'filename': os.path.basename(filepath),
+                'message': f'识别到 {len(data)} 种食物',
                 'code': 200
             })
         else:
@@ -96,97 +92,12 @@ def detect_food():
         }), 500
 
 
-@food_bp.route('/detect/deepseek', methods=['POST'])
-def detect_food_deepseek():
-    try:
-        if 'image' not in request.files:
-            return jsonify({
-                'success': False,
-                'message': '请上传图片文件',
-                'code': 400
-            }), 400
-
-        file = request.files['image']
-        if file.filename == '':
-            return jsonify({
-                'success': False,
-                'message': '未选择文件',
-                'code': 400
-            }), 400
-
-        file_ext = file.filename.rsplit('.', 1)[1].lower() if '.' in file.filename else 'jpg'
-        unique_filename = f"{uuid.uuid4().hex}.{file_ext}"
-
-        upload_folder = current_app.config.get('UPLOAD_FOLDER', 'uploads')
-        os.makedirs(upload_folder, exist_ok=True)
-        filepath = os.path.join(upload_folder, unique_filename)
-        file.save(filepath)
-
-        result = detector.detect_from_file(filepath)
-        status_code = 200 if result.get('success') else 400
-        return jsonify({
-            'success': result.get('success', False),
-            'message': result.get('message') or result.get('error') or '未识别到食物',
-            'filename': unique_filename,
-            'yolo_result': result,
-            'deepseek_result': result,
-            'code': status_code
-        }), status_code
-
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'错误: {str(e)}',
-            'code': 500
-        }), 500
-
-
-# 推荐接口
-def get_professional_recommendation(goal, cal_gap, protein_gap, intake_carbs, intake_fat):
-    gap_text = f"营养缺口分析：\n"
-    gap_text += f"- 热量缺口：{cal_gap:.0f}大卡\n" if cal_gap > 0 else "- 热量已达标或超标\n"
-    gap_text += f"- 蛋白质缺口：{protein_gap:.1f}g\n" if protein_gap > 0 else "- 蛋白质已达标\n"
-
-    if goal == 'gain':
-        supplement = (
-            "补充建议：\n"
-            "- 早餐：鸡蛋3个+燕麦粥+牛奶\n"
-            "- 午餐：鸡胸肉150g+糙米饭+蔬菜\n"
-            "- 加餐：蛋白棒或坚果\n"
-            "- 晚餐：鱼肉200g+红薯+绿叶菜\n"
-            "建议多摄入高蛋白食物，如鸡胸肉、牛肉、鱼、蛋、奶制品。"
-        )
-        notice = "注意事项：保证蛋白质摄入，适量增加碳水，避免高糖高油食物。"
-    elif goal == 'lose':
-        supplement = (
-            "补充建议：\n"
-            "- 早餐：2个鸡蛋+蔬菜沙拉\n"
-            "- 午餐：鸡胸肉120g+藜麦+大量蔬菜\n"
-            "- 晚餐：清蒸鱼150g+西兰花+豆腐\n"
-            "建议多吃蔬菜、瘦肉，控制主食和油脂摄入。"
-        )
-        notice = "注意事项：控制总热量，优先补充蛋白质，减少油脂和精制碳水摄入。"
-    else:
-        supplement = (
-            "补充建议：\n"
-            "- 早餐：全麦面包+鸡蛋+水果\n"
-            "- 午餐：鱼肉/鸡肉+杂粮饭+多种蔬菜\n"
-            "- 晚餐：豆腐+蔬菜+少量主食\n"
-            "保持饮食多样化，均衡营养。"
-        )
-        notice = "注意事项：保证食物多样性，适量运动，控制油盐摄入。"
-
-    replace_text = "食材替换推荐：如不喜欢鸡胸肉，可用牛肉、鱼肉、豆腐等替代；主食可用糙米、红薯、玉米等替换。"
-
-    return f"{gap_text}\n{supplement}\n\n{replace_text}\n\n{notice}"
-
 @food_bp.route('/recommend', methods=['POST'])
+@require_auth
 def recommend():
     data = request.get_json()
     goal = data.get('goal')  # 目标：gain/lose/maintain
-    user_id = data.get('user_id')
-    if not user_id:
-        return jsonify({'success': False, 'msg': '缺少user_id（openid）'}), 400
+    user_id = g.openid  # 身份来自登录 token
     # 优先读取数据库中的身高体重
     info = get_user_info(user_id)
     if info and info[0] is not None and info[1] is not None:
@@ -246,12 +157,13 @@ def recommend():
 
 # 新增：保存进食记录接口
 @food_bp.route('/record/add', methods=['POST'])
+@require_auth
 def add_record():
     data = request.get_json()
-    user_id = data.get('user_id')
-    if not user_id:
-        return jsonify({'success': False, 'msg': '缺少user_id（openid）'}), 400
+    user_id = g.openid  # 身份来自登录 token
     meal_type = data.get('meal_type', 'lunch')
+    if meal_type not in ('breakfast', 'lunch', 'dinner', 'snack'):
+        meal_type = 'lunch'  # 白名单校验，防止脏数据进库导致周报匹配不上
     canteen = data.get('canteen', '未知')
     foods = data.get('foods', [])
     print(user_id)
@@ -266,14 +178,13 @@ def add_record():
             meal_type=meal_type,
             canteen=canteen,
         )
-    return jsonify({'success': True, 'msg': '记录已保存'})
+    return jsonify({'success': True, 'message': '记录已保存'})
 
 # 新增：查询今日进食记录接口
 @food_bp.route('/record/today', methods=['GET'])
+@require_auth
 def today_record():
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify({'success': False, 'msg': '缺少user_id（openid）'}), 400
+    user_id = g.openid  # 身份来自登录 token
     records = get_today_records(user_id)
     nutrition_sum = get_today_nutrition_sum(user_id)
     return jsonify({

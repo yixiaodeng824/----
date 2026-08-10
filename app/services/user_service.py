@@ -5,7 +5,8 @@ from datetime import datetime
 DB_PATH = os.path.join(os.path.dirname(__file__), '../data/user_info.db')
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)  # busy_timeout 10s，缓解并发写锁
+    conn.execute('PRAGMA busy_timeout = 10000')
     return conn
 
 def init_db():

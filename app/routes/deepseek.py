@@ -3,20 +3,22 @@ DeepSeek 增强路由
 
 提供「YOLOv8 识别 + DeepSeek 联网搜索」的完整工作流端点。
 """
-import os
-import uuid
 import json
-from flask import Blueprint, request, jsonify, current_app, Response, stream_with_context
+from flask import Blueprint, request, jsonify, Response, stream_with_context
 
-from app.services.food_detection_service import FoodDetectionService
 from app.services.nutrition_service import get_nutrition_by_name
 from app.services.deepseek_service import query_food_info, query_food_info_stream
+from app.services.upload_service import save_upload, safe_remove
+from app.services.auth_service import require_auth
+
+# 复用 food.py 里的模型实例，避免重复加载
+from app.routes.food import detector
 
 deepseek_bp = Blueprint("deepseek", __name__)
-detector = FoodDetectionService()
 
 
 @deepseek_bp.route("/detect/deepseek", methods=["POST"])
+@require_auth
 def detect_with_deepseek():
     """
     完整的「YOLOv8 识别 → 本地营养查询 → DeepSeek 联网搜索」工作流。
@@ -50,21 +52,13 @@ def detect_with_deepseek():
         return jsonify({"success": False, "message": "未选择文件"}), 400
 
     # ── 2. 保存临时文件 ──
-    ext = file.filename.rsplit(".", 1)[1].lower() if "." in file.filename else "jpg"
-    filename = f"{uuid.uuid4().hex}.{ext}"
-    upload_folder = current_app.config.get("UPLOAD_FOLDER", "uploads")
-    os.makedirs(upload_folder, exist_ok=True)
-    filepath = os.path.join(upload_folder, filename)
-    file.save(filepath)
+    filepath = save_upload(file)
 
     # ── 3. YOLOv8 识别 ──
     yolo_result = detector.detect_from_file(filepath)
 
     # 识别完毕，删除临时图片
-    try:
-        os.remove(filepath)
-    except Exception:
-        pass
+    safe_remove(filepath)
 
     if not yolo_result["success"] or not yolo_result["detections"]:
         return jsonify({
@@ -113,6 +107,7 @@ def detect_with_deepseek():
 
 
 @deepseek_bp.route("/detect/deepseek/stream", methods=["POST"])
+@require_auth
 def detect_with_deepseek_stream():
     """
     流式版本 —— DeepSeek 部分逐字返回（Server-Sent Events），适合前端打字机效果。
@@ -134,20 +129,18 @@ def detect_with_deepseek_stream():
     if file.filename == "":
         return jsonify({"success": False, "message": "未选择文件"}), 400
 
-    ext = file.filename.rsplit(".", 1)[1].lower() if "." in file.filename else "jpg"
-    filename = f"{uuid.uuid4().hex}.{ext}"
-    upload_folder = current_app.config.get("UPLOAD_FOLDER", "uploads")
-    os.makedirs(upload_folder, exist_ok=True)
-    filepath = os.path.join(upload_folder, filename)
-    file.save(filepath)
+    filepath = save_upload(file)
 
     yolo_result = detector.detect_from_file(filepath)
     if not yolo_result["success"] or not yolo_result["detections"]:
+        safe_remove(filepath)
         return jsonify({"success": False, "message": "未识别到食物"}), 400
 
     food = yolo_result["detections"][0]
     food_name = food.get("chinese_name", food.get("name", "未知"))
     nutrition = get_nutrition_by_name(food_name) or {"calories": 0, "protein": 0, "carbs": 0, "fat": 0}
+    # YOLO 已识别完，流式期间不再需要原图
+    safe_remove(filepath)
 
     def generate():
         # 先发送 YOLO 结果（SSE 格式）
@@ -184,6 +177,7 @@ def detect_with_deepseek_stream():
 
 
 @deepseek_bp.route("/deepseek/query", methods=["POST"])
+@require_auth
 def deepseek_query():
     """
     单独调用 DeepSeek（无需上传图片，只需传入食物名和营养数据）。

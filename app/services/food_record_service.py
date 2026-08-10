@@ -6,13 +6,15 @@ DB_PATH = os.path.join(os.path.dirname(__file__), '../data/food_record.db')
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)  # busy_timeout 10s，缓解并发写锁
+    conn.execute('PRAGMA busy_timeout = 10000')
     return conn
 
 
 def init_db():
     conn = get_db()
     c = conn.cursor()
+    c.execute('PRAGMA journal_mode=WAL')  # WAL 模式：读写不互斥，多线程写更稳
     c.execute('''
         CREATE TABLE IF NOT EXISTS food_record (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,10 +61,14 @@ def add_food_record(user_id, food_name, calories, protein, carbs, fat,
 
 # ── 删 ──
 
-def delete_food_record(record_id):
+def delete_food_record(record_id, user_id=None):
+    """删除一条进食记录；传入 user_id 时仅允许删除自己的记录（防越权删除）"""
     conn = get_db()
     c = conn.cursor()
-    c.execute('DELETE FROM food_record WHERE id = ?', (record_id,))
+    if user_id:
+        c.execute('DELETE FROM food_record WHERE id = ? AND user_id = ?', (record_id, user_id))
+    else:
+        c.execute('DELETE FROM food_record WHERE id = ?', (record_id,))
     conn.commit()
     conn.close()
 

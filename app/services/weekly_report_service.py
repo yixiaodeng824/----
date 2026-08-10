@@ -26,7 +26,7 @@ def _get_deepseek_client():
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
         raise RuntimeError("未设置 DEEPSEEK_API_KEY")
-    return OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+    return OpenAI(api_key=api_key, base_url="https://api.deepseek.com", timeout=30)
 
 
 def build_weekly_data(user_id):

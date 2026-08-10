@@ -28,7 +28,7 @@ def _get_client() -> OpenAI:
             "请前往 https://platform.deepseek.com/api_keys 获取密钥\n"
             "然后设置: export DEEPSEEK_API_KEY=sk-xxxxx"
         )
-    return OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
+    return OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL, timeout=30)
 
 
 # ──────────────────────────────────────────────
