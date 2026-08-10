@@ -1,8 +1,9 @@
 """
 周报路由 — 提供周饮食数据 + DeepSeek AI 分析报告
 """
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 
+from app.services.auth_service import require_auth
 from app.services.food_record_service import (
     get_weekly_records,
     get_weekly_nutrition_sum_by_day,
@@ -23,11 +24,10 @@ MEAL_TYPE_ORDER = ['breakfast', 'lunch', 'dinner', 'snack']
 
 
 @weekly_bp.route('/report/weekly/data', methods=['GET'])
+@require_auth
 def weekly_data():
     """本周原始饮食数据（网格结构）"""
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify({'success': False, 'msg': '缺少user_id'}), 400
+    user_id = g.openid  # 身份来自登录 token
 
     data = build_weekly_data(user_id)
 
@@ -58,11 +58,10 @@ def weekly_data():
 
 
 @weekly_bp.route('/report/weekly/canteen', methods=['GET'])
+@require_auth
 def weekly_canteen():
     """本周食堂统计数据"""
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify({'success': False, 'msg': '缺少user_id'}), 400
+    user_id = g.openid  # 身份来自登录 token
 
     stats = get_canteen_stats(user_id)
     result = []
@@ -80,11 +79,10 @@ def weekly_canteen():
 
 
 @weekly_bp.route('/report/weekly/ai', methods=['GET'])
+@require_auth
 def weekly_ai_report():
     """DeepSeek 生成的 AI 周报"""
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify({'success': False, 'msg': '缺少user_id'}), 400
+    user_id = g.openid  # 身份来自登录 token
 
     report = generate_ai_report(user_id)
     return jsonify({
